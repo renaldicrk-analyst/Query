@@ -1,4 +1,4 @@
-mv ini ngambil spv dari master target
+-- mv ini ngambil spv dari master target
 
 create materialized view public.mv_manpower_cost_v2 as
 -- List outlet 1 kesatuan
