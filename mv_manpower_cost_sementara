@@ -1,0 +1,358 @@
+-- mv ini ambil spv dari master_spv_mapping
+DROP MATERIALIZED VIEW IF EXISTS mv_manpower_cost_sementara;
+create materialized view public.mv_manpower_cost_sementara as
+WITH
+  outlet_map AS (
+    SELECT
+      tab.outlet_raw,
+      tab.outlet_clean
+    FROM (
+      VALUES
+        ('Balonggede 2'::text, 'Balonggede'::text),
+        ('Baltos 2'::text, 'Baltos'::text),
+        ('Jatinangor 2'::text, 'Jatinangor'::text),
+        ('Paskal 2'::text, 'Paskal'::text),
+        ('Saparua 2'::text, 'Saparua'::text),
+        ('Sekeloa 2'::text, 'Sekeloa'::text),
+        ('Unjani 2'::text, 'Unjani'::text),
+        ('Miko Mall Kopo'::text, 'Alfamart Kopo'::text)
+    ) tab (outlet_raw, outlet_clean)
+  ),
+  master_out AS (
+    SELECT DISTINCT
+      mo.city AS branch,
+      COALESCE(om.outlet_clean, mo.outlet_name_std) AS outlet_name
+    FROM
+      master_outlet mo
+      LEFT JOIN outlet_map om ON mo.outlet_name_std = om.outlet_raw
+  ),
+  performa_mapped_distinct AS (
+    SELECT DISTINCT
+      ap.tanggal_sales,
+      COALESCE(om.outlet_clean, ap.outlet) AS outlet_name,
+      ap.sales,
+      ap.actual_working_time,
+      ap.supposed_working_time,
+      ap.posisi,
+      ap.crew
+    FROM
+      mv_outlet_attendance_performance ap
+      LEFT JOIN outlet_map om ON ap.outlet = om.outlet_raw
+  ),
+  performa AS (
+    SELECT
+      pmd.tanggal_sales AS tanggal,
+      pmd.outlet_name AS outlet,
+      SUM(DISTINCT pmd.sales) AS sales,
+      SUM(DISTINCT pmd.actual_working_time) AS act_working_time,
+      SUM(DISTINCT pmd.supposed_working_time) AS supposed_working_time,
+      COUNT(
+        DISTINCT CASE
+          WHEN pmd.posisi = 'PIC/Backup'::text THEN pmd.crew
+          ELSE NULL::text
+        END
+      ) AS jumlah_pic,
+      COUNT(
+        DISTINCT CASE
+          WHEN pmd.posisi = 'Perbantuan'::text THEN pmd.crew
+          ELSE NULL::text
+        END
+      ) AS jumlah_perbantuan,
+      COUNT(DISTINCT pmd.crew) AS total_crew
+    FROM
+      performa_mapped_distinct pmd
+    GROUP BY
+      pmd.tanggal_sales,
+      pmd.outlet_name
+  ),
+  with_branch AS (
+    SELECT
+      p.tanggal,
+      p.outlet,
+      p.sales,
+      p.act_working_time,
+      p.supposed_working_time,
+      p.jumlah_pic,
+      p.jumlah_perbantuan,
+      p.total_crew,
+      mo.branch
+    FROM
+      performa p
+      LEFT JOIN master_out mo ON p.outlet = mo.outlet_name
+  ),
+  manpower_salary AS (
+    SELECT
+      pc.tanggal,
+      COALESCE(om.outlet_clean, pc.outlet_tag_clean) AS outlet_name,
+      SUM(pc.kredit) AS salary
+    FROM
+      combine_petty_cash_outlet pc
+      LEFT JOIN outlet_map om ON pc.outlet_tag_clean = om.outlet_raw
+    WHERE
+      pc.kategori::text = 'Gaji'::text
+      AND pc.outlet_tag_clean <> 'Pasar Sederhana'::text
+    GROUP BY
+      pc.tanggal,
+      COALESCE(om.outlet_clean, pc.outlet_tag_clean)
+  ),
+
+  -- ==== SPV CURRENT PER OUTLET ====
+  current_spv_outlet AS (
+    SELECT
+	  case when outlet_tag_clean = 'Alfamart Kopo' then 'Miko Mall Kopo' else outlet_tag_clean end,
+      spv,
+      valid_from,
+      valid_to
+    FROM (
+      SELECT
+        m.*,
+        row_number() OVER (
+          PARTITION BY lower(trim(m.outlet_tag_clean))
+          ORDER BY m.valid_to DESC, m.valid_from DESC
+        ) AS rn
+      FROM
+        master_spv_mapping m
+    ) t
+    WHERE rn = 1
+  ),
+
+  final_raw AS (
+    SELECT
+      ms.tanggal,
+      wb.branch,
+      ms.outlet_name AS outlet,
+      so.spv,                           -- SPV current
+      ms.salary AS act_salary,
+      wb.sales,
+      wb.act_working_time,
+      wb.supposed_working_time,
+      wb.jumlah_pic,
+      wb.jumlah_perbantuan,
+      wb.total_crew,
+      CASE
+        WHEN wb.branch = 'Bandung'::text THEN
+          CASE
+            WHEN wb.total_crew = 1 THEN 100000
+            WHEN wb.total_crew = 2 THEN 200000
+            WHEN wb.total_crew = 3 THEN 290000
+            WHEN wb.total_crew = 4 THEN 380000
+            ELSE 0
+          END::numeric
+          +
+          CASE
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 1000000::numeric
+                 AND wb.sales < 1500000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 1500000::numeric
+                 AND wb.sales < 2000000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 2000000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 1500000::numeric
+                 AND wb.sales < 2000000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 2000000::numeric
+                 AND wb.sales < 2500000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 2500000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 2500000::numeric
+                 AND wb.sales < 3000000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 3000000::numeric
+                 AND wb.sales < 3500000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 3500000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 3500000::numeric
+                 AND wb.sales < 4000000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 4000000::numeric
+                 AND wb.sales < 4500000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 4500000::numeric THEN wb.sales * 0.10
+            ELSE 0::numeric
+          END
+        WHEN wb.branch = 'Jakarta'::text THEN
+          CASE
+            WHEN wb.total_crew = 1 THEN 115000
+            WHEN wb.total_crew = 2 THEN 230000
+            WHEN wb.total_crew = 3 THEN 335000
+            WHEN wb.total_crew = 4 THEN 440000
+            ELSE 0
+          END::numeric
+          +
+          CASE
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 1000000::numeric
+                 AND wb.sales < 1700000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 1700000::numeric
+                 AND wb.sales < 2200000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 1
+                 AND wb.sales >= 2200000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 1700000::numeric
+                 AND wb.sales < 2200000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 2200000::numeric
+                 AND wb.sales < 2700000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 2
+                 AND wb.sales >= 2700000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 2700000::numeric
+                 AND wb.sales < 3200000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 3200000::numeric
+                 AND wb.sales < 3700000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 3
+                 AND wb.sales >= 3700000::numeric THEN wb.sales * 0.10
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 3700000::numeric
+                 AND wb.sales < 4200000::numeric THEN wb.sales * 0.05
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 4200000::numeric
+                 AND wb.sales < 4700000::numeric THEN wb.sales * 0.08
+            WHEN wb.total_crew = 4
+                 AND wb.sales >= 4700000::numeric THEN wb.sales * 0.10
+            ELSE 0::numeric
+          END
+        ELSE NULL::numeric
+      END AS salary_true,
+      CASE
+        WHEN wb.branch = 'Jakarta'::text THEN
+          CASE
+            WHEN wb.sales < 1700000::numeric THEN 1
+            WHEN wb.sales < 2700000::numeric THEN 2
+            WHEN wb.sales < 3700000::numeric THEN 3
+            ELSE 4
+          END
+        WHEN wb.branch = 'Bandung'::text THEN
+          CASE
+            WHEN wb.sales < 1500000::numeric THEN 1
+            WHEN wb.sales < 2500000::numeric THEN 2
+            WHEN wb.sales < 3500000::numeric THEN 3
+            ELSE 4
+          END
+        ELSE NULL::integer
+      END AS manpower_optimal
+    FROM
+      manpower_salary ms
+      LEFT JOIN with_branch wb
+        ON wb.tanggal = ms.tanggal
+       AND wb.outlet = ms.outlet_name
+      LEFT JOIN current_spv_outlet so
+        ON lower(trim(so.outlet_tag_clean)) = lower(trim(ms.outlet_name))
+  )
+
+SELECT
+  fr.tanggal,
+  fr.branch,
+  fr.outlet,
+  fr.spv,
+  fr.act_salary,
+  fr.sales,
+  fr.act_working_time,
+  fr.supposed_working_time,
+  fr.jumlah_pic,
+  fr.jumlah_perbantuan,
+  fr.total_crew,
+  fr.salary_true,
+  fr.manpower_optimal,
+  CASE
+    WHEN fr.branch = 'Bandung'::text THEN
+      CASE
+        WHEN fr.manpower_optimal = 1 THEN 100000
+        WHEN fr.manpower_optimal = 2 THEN 200000
+        WHEN fr.manpower_optimal = 3 THEN 290000
+        WHEN fr.manpower_optimal = 4 THEN 380000
+        ELSE 0
+      END::numeric
+      +
+      CASE
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 1000000::numeric
+             AND fr.sales < 1500000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 1500000::numeric
+             AND fr.sales < 2000000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 2000000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 1500000::numeric
+             AND fr.sales < 2000000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 2000000::numeric
+             AND fr.sales < 2500000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 2500000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 2500000::numeric
+             AND fr.sales < 3000000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 3000000::numeric
+             AND fr.sales < 3500000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 3500000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 3500000::numeric
+             AND fr.sales < 4000000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 4000000::numeric
+             AND fr.sales < 4500000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 4500000::numeric THEN fr.sales * 0.10
+        ELSE 0::numeric
+      END
+    WHEN fr.branch = 'Jakarta'::text THEN
+      CASE
+        WHEN fr.manpower_optimal = 1 THEN 115000
+        WHEN fr.manpower_optimal = 2 THEN 230000
+        WHEN fr.manpower_optimal = 3 THEN 335000
+        WHEN fr.manpower_optimal = 4 THEN 440000
+        ELSE 0
+      END::numeric
+      +
+      CASE
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 1000000::numeric
+             AND fr.sales < 1700000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 1700000::numeric
+             AND fr.sales < 2200000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 1
+             AND fr.sales >= 2200000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 1700000::numeric
+             AND fr.sales < 2200000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 2200000::numeric
+             AND fr.sales < 2700000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 2
+             AND fr.sales >= 2700000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 2700000::numeric
+             AND fr.sales < 3200000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 3200000::numeric
+             AND fr.sales < 3700000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 3
+             AND fr.sales >= 3700000::numeric THEN fr.sales * 0.10
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 3700000::numeric
+             AND fr.sales < 4200000::numeric THEN fr.sales * 0.05
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 4200000::numeric
+             AND fr.sales < 4700000::numeric THEN fr.sales * 0.08
+        WHEN fr.manpower_optimal = 4
+             AND fr.sales >= 4700000::numeric THEN fr.sales * 0.10
+        ELSE 0::numeric
+      END
+    ELSE NULL::numeric
+  END AS ideal_salary
+FROM
+  final_raw fr
+ORDER BY
+  fr.tanggal,
+  fr.outlet
