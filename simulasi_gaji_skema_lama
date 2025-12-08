@@ -1,0 +1,93 @@
+with data1 as(select tanggal, branch, outlet, sales, total_crew, manpower_optimal,
+
+-- SIMULASI SALARY 1 CREW
+    (
+        CASE 
+            WHEN branch = 'Bandung' THEN 100000
+            WHEN branch = 'Jakarta' THEN 115000
+            ELSE 0
+        END
+        +
+        CASE 
+            WHEN branch = 'Bandung' AND sales >= 1000000 AND sales < 1500000 THEN sales * 0.05
+            WHEN branch = 'Bandung' AND sales >= 1500000 AND sales < 2000000 THEN sales * 0.08
+            WHEN branch = 'Bandung' AND sales >= 2000000 THEN sales * 0.10
+
+            WHEN branch = 'Jakarta' AND sales >= 1000000 AND sales < 1700000 THEN sales * 0.05
+            WHEN branch = 'Jakarta' AND sales >= 1700000 AND sales < 2200000 THEN sales * 0.08
+            WHEN branch = 'Jakarta' AND sales >= 2200000 THEN sales * 0.10
+            ELSE 0
+        END
+    ) AS salary_crew1,
+
+-- SIMULASI SALARY 2 CREW
+
+(
+        CASE 
+            WHEN branch = 'Bandung' THEN 200000
+            WHEN branch = 'Jakarta' THEN 230000
+            ELSE 0
+        END
+        +
+        CASE 
+            WHEN branch = 'Bandung' AND sales >= 1500000 AND sales < 2000000 THEN sales * 0.05
+            WHEN branch = 'Bandung' AND sales >= 2000000 AND sales < 2500000 THEN sales * 0.08
+            WHEN branch = 'Bandung' AND sales >= 2500000 THEN sales * 0.10
+
+            WHEN branch = 'Jakarta' AND sales >= 1700000 AND sales < 2200000 THEN sales * 0.05
+            WHEN branch = 'Jakarta' AND sales >= 2200000 AND sales < 2700000 THEN sales * 0.08
+            WHEN branch = 'Jakarta' AND sales >= 2700000 THEN sales * 0.10
+            ELSE 0
+        END
+    ) AS salary_crew2,
+
+
+-- SIMULASI SALARY 3 CREW
+
+(
+        CASE 
+            WHEN branch = 'Bandung' THEN 290000
+            WHEN branch = 'Jakarta' THEN 335000
+            ELSE 0
+        END
+        +
+        CASE 
+            WHEN branch = 'Bandung' AND sales >= 2500000 AND sales < 3000000 THEN sales * 0.05
+            WHEN branch = 'Bandung' AND sales >= 3000000 AND sales < 3500000 THEN sales * 0.08
+            WHEN branch = 'Bandung' AND sales >= 3500000 THEN sales * 0.10
+
+            WHEN branch = 'Jakarta' AND sales >= 2700000 AND sales < 3200000 THEN sales * 0.05
+            WHEN branch = 'Jakarta' AND sales >= 3200000 AND sales < 3700000 THEN sales * 0.08
+            WHEN branch = 'Jakarta' AND sales >= 3700000 THEN sales * 0.10
+            ELSE 0
+        END
+    ) AS salary_crew3,
+
+
+-- SIMULASI SALARY 4 CREW
+(
+        CASE 
+            WHEN branch = 'Bandung' THEN 380000
+            WHEN branch = 'Jakarta' THEN 440000
+            ELSE 0
+        END
+        +
+        CASE 
+            WHEN branch = 'Bandung' AND sales >= 3500000 AND sales < 4000000 THEN sales * 0.05
+            WHEN branch = 'Bandung' AND sales >= 4000000 AND sales < 4500000 THEN sales * 0.08
+            WHEN branch = 'Bandung' AND sales >= 4500000 THEN sales * 0.10
+
+            WHEN branch = 'Jakarta' AND sales >= 3700000 AND sales < 4200000 THEN sales * 0.05
+            WHEN branch = 'Jakarta' AND sales >= 4200000 AND sales < 4700000 THEN sales * 0.08
+            WHEN branch = 'Jakarta' AND sales >= 4700000 THEN sales * 0.10
+            ELSE 0
+        END
+    ) AS salary_crew4
+
+from mv_manpower_cost_v2
+where tanggal = '2025-12-03')
+
+SELECT *
+from data1
+where salary_crew3 < salary_crew2
+-- salary_crew2 < salary_crew1 or salary_crew3 < salary_crew2 or salary_crew3 < salary_crew4
