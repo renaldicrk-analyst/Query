@@ -1,0 +1,75 @@
+-- Digunakan untuk klasterisasi outlet (pake qty sold fg)
+create materialized view mv_qty_sold_fg as
+with data_trx as(
+SELECT a.store,
+case when a.item_name = 'Ayam Mix Beef' then 'MIX AYAM BEEF' else a.item_name end as item_name,
+date(a.transaction_date) as trx_date,
+sum(a.qty) as total_qty
+from all_transactions a
+where a.store !~~* 'Training%' and a.store not in ('Event', 'Frozen')
+and a.type !~~* 'Void%' and a.item_name !~~* 'CA%' and a.item_name !~~* '%Frozen%'
+group by a.store,
+(case when a.item_name = 'Ayam Mix Beef' then 'MIX AYAM BEEF' else a.item_name end),
+date(a.transaction_date)
+),
+
+date_trx_sum_fg as(
+select b.trx_date,
+b.store,
+'CIMOL BOJOT' as material,
+sum(case when b.item_name = 'CIMOL BOJOT PORSI BESAR' then 2 * b.total_qty
+when b.item_name ~~* '%BOJOT%' then 1 * b.total_qty else null end) as qty
+from data_trx b
+group by b.trx_date, b.store
+
+union
+
+select b.trx_date,
+b.store,
+'CIMOL AYAM' as material,
+sum(case when b.item_name = 'CIMOL AYAM PORSI BESAR' then 2 * b.total_qty
+when b.item_name ~~* '%AYAM%' then 1 * b.total_qty else null end) as qty
+from data_trx b
+group by b.trx_date, b.store
+
+UNION
+
+select b.trx_date,
+b.store,
+'CIMOL BEEF' as material,
+sum(case when b.item_name = 'CIMOL BEEF PORSI BESAR' then 2 * b.total_qty
+when b.item_name ~~* '%BEEF%' then 1 * b.total_qty else null end) as qty
+from data_trx b
+group by b.trx_date, b.store
+
+UNION
+
+select b.trx_date,
+b.store,
+'CIMOL MOZZA' as material,
+sum(case when b.item_name = 'CIMOL MOZZA PORSI BESAR' then 2 * b.total_qty
+when b.item_name ~~* '%MOZZA%' then 1 * b.total_qty else null end) as qty
+from data_trx b
+group by b.trx_date, b.store
+
+),
+
+outlet_map AS (
+    SELECT *
+    FROM (
+        VALUES 
+            ('Balonggede 2', 'Balonggede'),
+            ('Baltos 2', 'Baltos'),
+            ('Jatinangor 2', 'Jatinangor'),
+            ('Paskal 2', 'Paskal'),
+            ('Saparua 2', 'Saparua'),
+            ('Sekeloa 2', 'Sekeloa'),
+            ('Unjani 2', 'Unjani'),
+            ('Miko Mall Kopo', 'Alfamart Kopo')
+    ) AS tab(outlet_raw, outlet_clean))
+
+
+select c.trx_date, coalesce(om.outlet_clean, c.store), sum(qty) 
+from date_trx_sum_fg c 
+left join outlet_map om on c.store = om.outlet_raw
+group by c.trx_date, coalesce(om.outlet_clean, c.store)
